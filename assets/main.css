@@ -1,0 +1,17 @@
+/* Global blur for all images to prevent the "flash" of NSFW content */
+img {
+  filter: blur(50px) !important;
+  transition: filter 0.4s ease-in-out;
+}
+
+/* We will use this class later when the AI says it is safe */
+img.nsfw-safe {
+  filter: none !important;
+}
+
+/* Extra protection for confirmed bad images */
+img.nsfw-blocked {
+  filter: blur(100px) grayscale(100%) !important;
+  opacity: 0.1 !important;
+  pointer-events: none;
+}

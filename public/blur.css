@@ -1,0 +1,16 @@
+/* Zero-Flash Global Blur */
+/* This file is loaded directly by the browser manifest */
+img {
+  filter: blur(50px) !important;
+  transition: filter 0.4s ease-in-out;
+}
+
+img.nsfw-safe {
+  filter: none !important;
+}
+
+img.nsfw-blocked {
+  filter: blur(100px) grayscale(100%) !important;
+  opacity: 0.1 !important;
+  pointer-events: none;
+}
