@@ -15,5 +15,15 @@ export default defineConfig({
         run_at: 'document_start',
       },
     ],
+    permissions: ['offscreen'],
+    content_security_policy: {
+      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+    },
+    web_accessible_resources: [
+      {
+        resources: ['onnx/*', 'nsfw_model.onnx'],
+        matches: ['<all_urls>'],
+      },
+    ],
   },
 });

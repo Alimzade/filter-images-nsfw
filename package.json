@@ -17,5 +17,8 @@
   "devDependencies": {
     "typescript": "^5.9.3",
     "wxt": "^0.20.25"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.24.3"
   }
 }

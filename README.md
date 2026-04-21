@@ -1,17 +1,21 @@
-# Nudity Blocker - Phase 1: Safety First
+# Nudity Blocker - Project Status
 
 A browser extension that uses local AI to filter NSFW content.
 
-## Phase 1: Zero-Flash Blur
-The current implementation ensures that no NSFW image is ever visible, even for a single frame, by using **Manifest-level CSS Injection**.
+## Phase 1: Zero-Flash Blur (Completed)
+- Images are blurred via manifest-level CSS before they load.
+- Failsafe protection ensures nothing is visible before the AI scan.
 
-### How it works:
-1. **Hardcoded CSS:** `public/blur.css` is injected by the browser itself at `document_start`.
-2. **Zero-Flash Timing:** Because the blur is defined in the extension manifest, the browser applies the filter before the website's images are even downloaded.
-3. **Failsafe:** All `<img>` tags are blurred by default (`blur(50px)`). Images are only unblurred if they are explicitly marked with the `.nsfw-safe` class (to be implemented in Phase 2).
+## Phase 2: AI Engine Integration (Completed)
+- **Engine:** ONNX Runtime Web.
+- **Model:** NSFWJS (MobileNet V2) in ONNX format.
+- **Architecture:** "Offscreen Pipeline".
+  - **Offscreen Document:** A hidden HTML page where the AI engine runs with full permissions.
+  - **Background Script:** Manages the offscreen room and relays messages.
+  - **Local Privacy:** 100% browser-based inference. No images or data leave the user's device.
+- **Security:** Configured Content Security Policy (CSP) to allow WebAssembly safely.
 
-## Tech Stack
-- **Framework:** WXT (Web Extension Toolkit)
-- **Bundler:** Vite / Rolldown
-- **Browser:** Edge (Chromium)
-- **Package Manager:** pnpm
+## Phase 3: The Surgical Unblur (Next)
+- Real-time scanning of images as they appear.
+- Detection of "Porn" and "Sexy" (suggestive/porn-like) categories.
+- Selective unblurring for "Neutral" and "Safe" content.
