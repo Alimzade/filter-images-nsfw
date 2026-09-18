@@ -59,16 +59,19 @@ The extension uses a single local ONNX model:
 - **Input Tensor**: `[1, 224, 224, 3]` (NHWC, float32, normalized to [0, 1])
 - **Labels**: `Drawing`, `Hentai`, `Neutral`, `Porn`, `Sexy`
 - **Classification Thresholds**:
-  - `Porn` > 0.45 or `Hentai` > 0.45 => Blocked
-  - `Porn` + `Hentai` > 0.40 => Blocked
-  - `Sexy` > 0.75 (with `Neutral` < 0.20) => Blocked
-  - Combined (`Porn` + `Hentai` > 0.25 and `Sexy` > 0.45 with `Neutral` < 0.25) => Blocked
+  - Primary Class `Porn` or `Hentai` => Blocked
+  - `Porn` > 0.28 or `Hentai` > 0.28 => Blocked
+  - `Porn` + `Hentai` > 0.30 => Blocked
+  - `Sexy` > 0.50 (with `Neutral` < 0.40) => Blocked
+  - `Sexy` > 0.70 => Blocked
+  - Combined NSFW (`Porn` + `Hentai` + `Sexy` > 0.55 with `Neutral` < 0.35) => Blocked
+  - Partial Nudity / Porn signals (`Porn` + 0.5 * `Sexy` > 0.35 with `Neutral` < 0.30) => Blocked
   - Otherwise => Safe
 
 ## Message Contracts
 
 ### `CHECK_NSFW` (Content Script -> Background)
-- **Request**: `{ type: 'CHECK_NSFW', url: string, pixelData?: number[] }`
+- **Request**: `{ type: 'CHECK_NSFW', url: string, pixelData?: number[], referrer?: string }`
 - **Background Action**: Forwards to offscreen document with `{ type: 'CHECK_NSFW_OFFSCREEN' }` with up to 12 retries with exponential backoff.
 - **Response**: `{ isSafe: boolean, label: string, score: number }`
 

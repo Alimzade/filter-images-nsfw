@@ -54,6 +54,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 const scan = (img, priority = 'low') => {
+  if (!chrome.runtime?.id) return;
   const url = img.currentSrc || img.src;
   if (!url) return;
 
@@ -167,6 +168,14 @@ async function processImage(img, safeUrls, blockedUrls) {
       });
     }
 
+    if (img.complete && img.naturalWidth === 0) {
+      // Image failed to load on the page (e.g. 404/broken image) - nothing to scan
+      img.classList.add('nsfw-safe');
+      img.dataset.nsfwStatus = 'safe';
+      viewportObserver.unobserve(img);
+      return;
+    }
+
     if (img.naturalWidth > 0 && img.naturalWidth < 32 && img.naturalHeight < 32) {
       img.classList.add('nsfw-safe');
       img.dataset.nsfwStatus = 'safe';
@@ -207,6 +216,9 @@ async function processImage(img, safeUrls, blockedUrls) {
       viewportObserver.unobserve(img);
     }
   } catch (e) {
+    if (!chrome.runtime?.id || String(e).includes('Extension context invalidated')) {
+      return;
+    }
     console.warn('[NSFW Filter] Error scanning image:', e);
     img.classList.remove('nsfw-blocked');
     img.classList.add('nsfw-safe');
@@ -215,23 +227,27 @@ async function processImage(img, safeUrls, blockedUrls) {
 }
 
 async function scanPixels(img, url) {
-  if (url.startsWith('blob:')) {
-    try {
-      const canvas = new OffscreenCanvas(224, 224);
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, 224, 224);
-      const pixels = ctx.getImageData(0, 0, 224, 224).data;
-      return await chrome.runtime.sendMessage({
-        type: 'CHECK_NSFW',
-        url: url,
-        pixelData: Array.from(pixels),
-      });
-    } catch (e) {}
+  // Attempt to extract pixels directly from the loaded <img> element first.
+  // This succeeds for data: URLs, same-origin, and CORS-enabled images without an extra network request.
+  try {
+    const canvas = new OffscreenCanvas(224, 224);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, 224, 224);
+    const pixels = ctx.getImageData(0, 0, 224, 224).data;
+    return await chrome.runtime.sendMessage({
+      type: 'CHECK_NSFW',
+      url: url,
+      pixelData: Array.from(pixels),
+      referrer: window.location.href,
+    });
+  } catch (_) {
+    // Canvas tainted by cross-origin restrictions or image unrenderable; fall back to URL fetch
   }
 
   return await chrome.runtime.sendMessage({
     type: 'CHECK_NSFW',
     url: url,
+    referrer: window.location.href,
   });
 }
 

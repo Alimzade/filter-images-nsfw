@@ -120,15 +120,26 @@ async function processImage(session, message) {
       }
     } else {
       try {
-        const response = await fetch(message.url);
+        const fetchOptions = {};
+        if (message.referrer) {
+          fetchOptions.referrer = message.referrer;
+        }
+        const response = await fetch(message.url, fetchOptions);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        }
         const blob = await response.blob();
+        if (blob.size === 0) {
+          throw new Error('Empty image blob (0 bytes)');
+        }
         const bitmap = await createImageBitmap(blob, { resizeWidth: targetSize, resizeHeight: targetSize });
         const canvas = new OffscreenCanvas(targetSize, targetSize);
         const ctx = canvas.getContext('2d');
         ctx.drawImage(bitmap, 0, 0);
         pixels = ctx.getImageData(0, 0, targetSize, targetSize).data;
       } catch (fetchErr) {
-        console.warn('Could not fetch image directly for scan, unblurring fallback:', fetchErr);
+        const errMsg = fetchErr instanceof Error ? `${fetchErr.name}: ${fetchErr.message}` : String(fetchErr);
+        console.warn(`Could not fetch image directly for scan (${errMsg}), unblurring fallback:`, message.url ? message.url.slice(0, 80) : '');
         return { isSafe: true, label: 'fetch_fallback', score: 1.0 };
       }
     }
@@ -157,27 +168,50 @@ async function processImage(session, message) {
     const neutral = scores['Neutral'] || 0;
 
     const pornHentai = porn + hentai;
+    const nsfwCombined = porn + hentai + sexy;
+    const topLabel = MOBILENET_LABELS.reduce((a, b) => (scores[a] > scores[b] ? a : b));
 
     let isSafe = true;
     let blockReason = '';
-    if (porn > 0.45) {
+
+    // 1. Primary predicted label is explicitly adult
+    if (topLabel === 'Porn') {
       isSafe = false;
-      blockReason = 'Explicit Porn (>45%)';
-    } else if (hentai > 0.45) {
+      blockReason = `Primary Class is Porn (${(porn * 100).toFixed(1)}%)`;
+    } else if (topLabel === 'Hentai') {
       isSafe = false;
-      blockReason = 'Explicit Hentai (>45%)';
-    } else if (pornHentai > 0.40) {
+      blockReason = `Primary Class is Hentai (${(hentai * 100).toFixed(1)}%)`;
+    }
+    // 2. Direct explicit thresholds (lowered to catch multi-class probability splits)
+    else if (porn > 0.28) {
       isSafe = false;
-      blockReason = 'Porn + Hentai Combined (>40%)';
-    } else if (sexy > 0.75 && neutral < 0.20) {
+      blockReason = `Explicit Porn (>28%: ${(porn * 100).toFixed(1)}%)`;
+    } else if (hentai > 0.28) {
       isSafe = false;
-      blockReason = 'High Confidence Sexy (>75%)';
-    } else if (pornHentai > 0.25 && sexy > 0.45 && neutral < 0.25) {
+      blockReason = `Explicit Hentai (>28%: ${(hentai * 100).toFixed(1)}%)`;
+    }
+    // 3. Combined explicit pornographic and hentai content
+    else if (pornHentai > 0.30) {
       isSafe = false;
-      blockReason = 'Combined NSFW (>70%)';
+      blockReason = `Porn + Hentai Combined (>30%: ${(pornHentai * 100).toFixed(1)}%)`;
+    }
+    // 4. Suggestive / Nude / Scantily Clad
+    else if (sexy > 0.50 && neutral < 0.40) {
+      isSafe = false;
+      blockReason = `Suggestive/Nudity (>50% Sexy, ${(sexy * 100).toFixed(1)}% with low Neutral)`;
+    } else if (sexy > 0.70) {
+      isSafe = false;
+      blockReason = `High Confidence Sexy (>70%: ${(sexy * 100).toFixed(1)}%)`;
+    }
+    // 5. Blended NSFW (split between porn/hentai/sexy with low neutral anchor)
+    else if (nsfwCombined > 0.55 && neutral < 0.35) {
+      isSafe = false;
+      blockReason = `Combined NSFW (>55%: ${(nsfwCombined * 100).toFixed(1)}%)`;
+    } else if (porn + (sexy * 0.5) > 0.35 && neutral < 0.30) {
+      isSafe = false;
+      blockReason = `Partial Nudity/Porn Signals (${((porn + sexy * 0.5) * 100).toFixed(1)}%)`;
     }
 
-    const topLabel = MOBILENET_LABELS.reduce((a, b) => (scores[a] > scores[b] ? a : b));
     const topScore = scores[topLabel];
     const logDetails = MOBILENET_LABELS.map((l) => `${l}: ${(scores[l] * 100).toFixed(1)}%`).join(' | ');
     console.log(`[${isSafe ? 'SAFE' : 'BLOCK'}] ${blockReason ? blockReason + ' ' : ''}-> ${logDetails}`);
