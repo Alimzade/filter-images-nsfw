@@ -1,18 +1,16 @@
 console.log('NSFW Filter: Active');
 
 // Keep the background service worker alive so long-running inference requests
-// (especially the 88MB ViT model load) don't kill the message channel.
+// don't kill the message channel.
 function connectKeepalive() {
   try {
     const port = chrome.runtime.connect({ name: 'nsfw-keepalive' });
     port.onDisconnect.addListener(() => {
-      // chrome.runtime.lastError is set when the context is invalidated
-      // (e.g. extension reloaded). Stop reconnecting in that case.
       if (chrome.runtime.lastError) return;
       setTimeout(connectKeepalive, 250);
     });
   } catch (_) {
-    // Extension context invalidated - content script is orphaned, nothing to do
+    // Extension context invalidated; content script is orphaned
   }
 }
 connectKeepalive();
@@ -21,9 +19,16 @@ const safeUrls = new Set();
 const blockedUrls = new Set();
 let isFilterActive = true;
 
+// Concurrency control and viewport prioritization
+const MAX_CONCURRENT_SCANS = 4;
+let activeScans = 0;
+const scanQueue = [];
+const visibleImages = new WeakSet();
+
 function setDisabledState(disabled) {
   isFilterActive = !disabled;
   if (disabled) {
+    scanQueue.length = 0;
     document.documentElement.classList.add('nsfw-disabled');
     document.querySelectorAll('img').forEach((img) => {
       img.classList.remove('nsfw-blocked');
@@ -36,7 +41,6 @@ function setDisabledState(disabled) {
       delete img.dataset.nsfwStatus;
       img.classList.remove('nsfw-safe');
       viewportObserver.observe(img);
-      scan(img, 'high');
     });
   }
 }
@@ -53,7 +57,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-const scan = (img, priority = 'low') => {
+function removeFromQueue(img) {
+  const index = scanQueue.findIndex((item) => item.img === img);
+  if (index !== -1) {
+    scanQueue.splice(index, 1);
+    if (img.dataset.nsfwStatus === 'pending') {
+      delete img.dataset.nsfwStatus;
+    }
+  }
+}
+
+function requestScan(img) {
   if (!chrome.runtime?.id) return;
   const url = img.currentSrc || img.src;
   if (!url) return;
@@ -70,6 +84,7 @@ const scan = (img, priority = 'low') => {
     img.classList.remove('nsfw-safe');
     img.classList.remove('nsfw-blocked');
     delete img.dataset.nsfwStatus;
+    removeFromQueue(img);
   }
 
   if (safeUrls.has(url)) {
@@ -90,23 +105,65 @@ const scan = (img, priority = 'low') => {
   }
 
   if (img.dataset.nsfwLastUrl === url &&
-      (img.dataset.nsfwStatus === 'pending' || img.dataset.nsfwStatus === 'safe' ||
-       img.dataset.nsfwStatus === 'blocked' || img.dataset.nsfwStatus === 'fallback_safe' ||
-       img.dataset.nsfwStatus === 'error_safe')) {
+      (img.dataset.nsfwStatus === 'pending' || img.dataset.nsfwStatus === 'processing' ||
+       img.dataset.nsfwStatus === 'safe' || img.dataset.nsfwStatus === 'blocked' ||
+       img.dataset.nsfwStatus === 'fallback_safe' || img.dataset.nsfwStatus === 'error_safe')) {
     return;
   }
 
-  processImage(img, safeUrls, blockedUrls);
-};
+  img.dataset.nsfwStatus = 'pending';
+  img.dataset.nsfwLastUrl = url;
+
+  // Prioritize recently visible images (LIFO)
+  removeFromQueue(img);
+  scanQueue.unshift({ img, url });
+  pumpQueue();
+}
+
+function pumpQueue() {
+  if (!isFilterActive) return;
+
+  while (activeScans < MAX_CONCURRENT_SCANS && scanQueue.length > 0) {
+    const item = scanQueue.shift();
+    const { img, url } = item;
+
+    // Discard if element is detached or no longer intersecting viewport
+    if (!img.isConnected || !visibleImages.has(img)) {
+      if (img.isConnected && img.dataset.nsfwStatus === 'pending') {
+        delete img.dataset.nsfwStatus;
+      }
+      continue;
+    }
+
+    const currentUrl = img.currentSrc || img.src;
+    if (currentUrl !== url) {
+      delete img.dataset.nsfwStatus;
+      continue;
+    }
+
+    activeScans++;
+    img.dataset.nsfwStatus = 'processing';
+
+    processImage(img, currentUrl, safeUrls, blockedUrls)
+      .finally(() => {
+        activeScans--;
+        pumpQueue();
+      });
+  }
+}
 
 const viewportObserver = new IntersectionObserver((entries) => {
   entries.forEach((entry) => {
+    const img = entry.target;
     if (entry.isIntersecting) {
-      const img = entry.target;
-      scan(img);
+      visibleImages.add(img);
+      requestScan(img);
+    } else {
+      visibleImages.delete(img);
+      removeFromQueue(img);
     }
   });
-}, { threshold: 0.01, rootMargin: '300px 0px' });
+}, { threshold: 0.01, rootMargin: '200px 0px' });
 
 const domObserver = new MutationObserver((mutations) => {
   mutations.forEach((mutation) => {
@@ -114,7 +171,6 @@ const domObserver = new MutationObserver((mutations) => {
       const target = mutation.target;
       if (target instanceof HTMLImageElement) {
         viewportObserver.observe(target);
-        scan(target);
       }
       return;
     }
@@ -148,17 +204,7 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-async function processImage(img, safeUrls, blockedUrls) {
-  const currentUrl = img.currentSrc || img.src;
-  if (!currentUrl) return;
-
-  if (img.dataset.nsfwStatus === 'pending' && img.dataset.nsfwLastUrl === currentUrl) {
-    return;
-  }
-
-  img.dataset.nsfwStatus = 'pending';
-  img.dataset.nsfwLastUrl = currentUrl;
-
+async function processImage(img, currentUrl, safeUrls, blockedUrls) {
   try {
     if (!img.complete) {
       await new Promise((resolve) => {
@@ -168,8 +214,12 @@ async function processImage(img, safeUrls, blockedUrls) {
       });
     }
 
+    if (!img.isConnected) {
+      delete img.dataset.nsfwStatus;
+      return;
+    }
+
     if (img.complete && img.naturalWidth === 0) {
-      // Image failed to load on the page (e.g. 404/broken image) - nothing to scan
       img.classList.add('nsfw-safe');
       img.dataset.nsfwStatus = 'safe';
       viewportObserver.unobserve(img);
@@ -185,15 +235,13 @@ async function processImage(img, safeUrls, blockedUrls) {
     }
 
     const result = await scanPixels(img, currentUrl);
-    console.log('[NSFW Filter] Scanned:', currentUrl.slice(0, 60), result);
 
     if (result && result.label === 'model_loading') {
-      // Model is still loading - leave image blurred and schedule rescan
       delete img.dataset.nsfwStatus;
       img.dataset.nsfwLastUrl = '';
       setTimeout(() => {
-        if (img.isConnected && !img.dataset.nsfwStatus) {
-          scan(img);
+        if (img.isConnected && !img.dataset.nsfwStatus && visibleImages.has(img)) {
+          requestScan(img);
         }
       }, 1500);
     } else if (result && result.isSafe) {
@@ -209,7 +257,6 @@ async function processImage(img, safeUrls, blockedUrls) {
       img.dataset.nsfwStatus = 'blocked';
       viewportObserver.unobserve(img);
     } else {
-      // Relay or timeout error - unblur fallback to avoid locking safe images
       img.classList.remove('nsfw-blocked');
       img.classList.add('nsfw-safe');
       img.dataset.nsfwStatus = 'fallback_safe';
@@ -217,6 +264,14 @@ async function processImage(img, safeUrls, blockedUrls) {
     }
   } catch (e) {
     if (!chrome.runtime?.id || String(e).includes('Extension context invalidated')) {
+      return;
+    }
+    if (String(e).includes('message channel closed') || String(e).includes('listener indicated an asynchronous response')) {
+      delete img.dataset.nsfwStatus;
+      img.dataset.nsfwLastUrl = '';
+      setTimeout(() => {
+        if (img.isConnected && visibleImages.has(img)) requestScan(img);
+      }, 1000);
       return;
     }
     console.warn('[NSFW Filter] Error scanning image:', e);
@@ -227,21 +282,28 @@ async function processImage(img, safeUrls, blockedUrls) {
 }
 
 async function scanPixels(img, url) {
-  // Attempt to extract pixels directly from the loaded <img> element first.
-  // This succeeds for data: URLs, same-origin, and CORS-enabled images without an extra network request.
-  try {
-    const canvas = new OffscreenCanvas(224, 224);
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0, 224, 224);
-    const pixels = ctx.getImageData(0, 0, 224, 224).data;
-    return await chrome.runtime.sendMessage({
-      type: 'CHECK_NSFW',
-      url: url,
-      pixelData: Array.from(pixels),
-      referrer: window.location.href,
-    });
-  } catch (_) {
-    // Canvas tainted by cross-origin restrictions or image unrenderable; fall back to URL fetch
+  // Only extract pixels on client for non-HTTP data/blob URLs where offscreen fetch cannot access context.
+  // For standard HTTP/HTTPS URLs (like YouTube thumbnails), dispatching the URL directly saves 200K serialized array integers.
+  const isInline = url.startsWith('data:') || url.startsWith('blob:');
+  if (isInline) {
+    try {
+      const canvas = new OffscreenCanvas(224, 224);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, 224, 224);
+      const pixels = ctx.getImageData(0, 0, 224, 224).data;
+      return await chrome.runtime.sendMessage({
+        type: 'CHECK_NSFW',
+        url: url,
+        pixelData: Array.from(pixels),
+        referrer: window.location.href,
+      });
+    } catch (e) {
+      if (String(e).includes('message channel closed') ||
+          String(e).includes('listener indicated an asynchronous response') ||
+          String(e).includes('Extension context invalidated')) {
+        throw e;
+      }
+    }
   }
 
   return await chrome.runtime.sendMessage({
@@ -250,5 +312,3 @@ async function scanPixels(img, url) {
     referrer: window.location.href,
   });
 }
-
-

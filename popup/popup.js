@@ -5,9 +5,7 @@ async function init() {
   const powerBtn = document.querySelector('#master-power-btn');
   const powerBtnText = document.querySelector('#power-btn-text');
 
-  if (!statusBadge || !powerBtn || !powerBtnText) {
-    return;
-  }
+  if (!statusBadge || !powerBtn || !powerBtnText) return;
 
   let isEnabled = DEFAULT_ENABLED;
 
@@ -17,15 +15,20 @@ async function init() {
       isEnabled = data.filterEnabled;
     }
   } catch (err) {
-    console.warn('Could not read storage, using defaults:', err);
+    console.warn('Could not read filterEnabled from storage:', err);
   }
 
   const updateUI = () => {
     statusBadge.textContent = isEnabled ? 'Active' : 'Paused';
     statusBadge.className = `badge ${isEnabled ? 'active' : 'paused'}`;
 
-    powerBtn.className = `master-btn ${isEnabled ? 'btn-turn-off' : 'btn-turn-on'}`;
-    powerBtnText.textContent = isEnabled ? 'Turn Off Filter' : 'Turn On Filter';
+    if (isEnabled) {
+      powerBtn.className = 'master-btn btn-turn-off';
+      powerBtnText.textContent = 'Turn Off Filter';
+    } else {
+      powerBtn.className = 'master-btn btn-turn-on';
+      powerBtnText.textContent = 'Turn On Filter';
+    }
   };
 
   updateUI();
@@ -36,7 +39,10 @@ async function init() {
 
     try {
       await chrome.storage.local.set({ filterEnabled: isEnabled });
-      chrome.runtime.sendMessage({ type: 'FILTER_TOGGLED', enabled: isEnabled }).catch(() => {});
+      chrome.runtime.sendMessage({
+        type: 'FILTER_TOGGLED',
+        enabled: isEnabled,
+      }).catch(() => {});
     } catch (err) {
       console.error('Failed to save filter status:', err);
     }
