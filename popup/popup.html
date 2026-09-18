@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NSFW Filter</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div class="header">
+        <div class="title-group">
+          <h1>NSFW Filter</h1>
+        </div>
+        <span id="status-badge" class="badge active">Active</span>
+      </div>
+
+      <button id="master-power-btn" class="master-btn btn-turn-off" type="button">
+        <svg class="power-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+          <line x1="12" y1="2" x2="12" y2="12"></line>
+        </svg>
+        <span id="power-btn-text">Turn Off Filter</span>
+      </button>
+
+      <div class="footer">
+        100% on-device AI. Zero telemetry.
+      </div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

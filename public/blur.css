@@ -5,8 +5,16 @@ img {
   transition: filter 0.4s ease-in-out;
 }
 
+html.nsfw-disabled img {
+  filter: none !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
 img.nsfw-safe {
   filter: none !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
 }
 
 img.nsfw-blocked {

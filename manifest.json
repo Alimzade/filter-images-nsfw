@@ -1,0 +1,62 @@
+{
+  "manifest_version": 3,
+  "name": "NSFW Filter",
+  "version": "1.0.0",
+  "description": "Locally filters and blurs NSFW images using on-device AI",
+  "icons": {
+    "16": "public/icon/16.png",
+    "32": "public/icon/32.png",
+    "48": "public/icon/48.png",
+    "128": "public/icon/128.png"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "permissions": [
+    "offscreen",
+    "storage",
+    "tabs"
+  ],
+  "incognito": "spanning",
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "css": [
+        "public/blur.css"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "NSFW Filter",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "public/icon/16.png",
+      "32": "public/icon/32.png",
+      "48": "public/icon/48.png",
+      "128": "public/icon/128.png"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "public/onnx/*",
+        "public/nsfw_model.onnx"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}
