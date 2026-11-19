@@ -115,6 +115,111 @@ html, body {
   height: 16px;
 }
 
+/* Model Selector Section */
+.model-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0 2px 0;
+  border-top: 1px solid var(--card-border);
+}
+
+.model-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.model-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+}
+
+.model-status-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  transition: all 0.2s ease;
+}
+
+.model-status-badge.loading {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.model-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-option {
+  cursor: pointer;
+}
+
+.model-option input[type="radio"] {
+  display: none;
+}
+
+.model-card {
+  padding: 8px 10px;
+  background-color: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.model-option:hover .model-card {
+  border-color: #475569;
+  background-color: #243048;
+}
+
+.model-option input[type="radio"]:checked + .model-card {
+  border-color: var(--primary);
+  background-color: rgba(59, 130, 246, 0.08);
+}
+
+.model-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.model-tag {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background-color: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  text-transform: uppercase;
+}
+
+.model-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.model-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  min-height: 14px;
+  line-height: 1.4;
+}
+
 .footer {
   font-size: 11px;
   color: var(--text-muted);

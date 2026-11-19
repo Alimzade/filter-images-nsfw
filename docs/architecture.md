@@ -63,13 +63,15 @@ These files are declared under `web_accessible_resources` in `manifest.json` and
 
 The extension uses a compact, locally bundled MobileNet V2 model optimized for low latency in browser environments.
 
+### Model 1: MobileNet V2 (Default)
+
 - **File**: `public/nsfw_model.onnx`
 - **Size**: 9.9 MB
 - **Input Tensor**: `[1, 224, 224, 3]` (NHWC, float32, normalized to [0, 1])
 - **Labels**: `Drawing`, `Hentai`, `Neutral`, `Porn`, `Sexy`
 - **Classification**: Balanced threshold profile calibrated for automated browser content moderation.
 
-### Balanced Threshold Profile (MobileNet V2)
+#### Balanced Threshold Profile (MobileNet V2)
 
 Rules apply only when `neutral <= 0.65` (escape hatch: high neutral confidence skips all rules).
 Hentai rules are suppressed when `drawing > 0.30` (guard against anime/manga false positives).
@@ -85,14 +87,30 @@ Hentai rules are suppressed when `drawing > 0.30` (guard against anime/manga fal
 | Unconditional Sexy | `sexy > 0.85` | High confidence threshold |
 | Blended NSFW | `porn + hentai + sexy > 0.75` and `neutral < 0.15` | Multi-class signal aggregation |
 
+### Model 2: MobileNet V3-Large
+
+- **File**: `public/mobilenet_v3.onnx`
+- **Size**: 16.8 MB (FP32)
+- **Architecture**: MobileNetV3-Large distilled from caformer_s36 using SCELoss (`deepghs/anime_rating`)
+- **Input Tensor**: `[1, 3, 224, 224]` (NCHW, float32, ImageNet normalized: mean `[0.485, 0.456, 0.406]`, std `[0.229, 0.224, 0.225]`)
+- **Labels**: `safe`, `r15`, `r18`
+- **Inference Speed**: ~20ms to 30ms on WASM CPU
+- **Output**: The bundled export already ends in a softmax, so its output `[1, 3]` is used as probabilities directly (softmax is applied only if the output does not sum to 1).
+- **Classification**: Requires decisive high confidence on explicit R18 (`topLabel === 'r18' && r18 >= 0.70` or `r18 >= 0.85`) to avoid false positives on out-of-distribution real photography like vehicles and scenery.
+
 ## Message Contracts
 
 ### `CHECK_NSFW` (Content Script -> Background)
 - **Request**: `{ type: 'CHECK_NSFW', url: string, pixelData?: number[], referrer?: string }`
-- **Background Action**: Forwards to offscreen as `CHECK_NSFW_OFFSCREEN` with up to 12 retries with exponential backoff.
+- **Background Action**: Forwards to offscreen as `CHECK_NSFW_OFFSCREEN` with selectedModel and up to 12 retries with exponential backoff.
 - **Response**: `{ isSafe: boolean, label: string, score: number }`
 
 ### `FILTER_TOGGLED` (Popup -> Background -> Tabs)
 - **Request**: `{ type: 'FILTER_TOGGLED', enabled: boolean }`
 - **Background Action**: Iterates all active tabs and broadcasts the new state.
 - **Content Action**: Adds or removes `.nsfw-disabled` on `document.documentElement` and flips existing image classes.
+
+### `MODEL_CHANGED` (Popup -> Background -> Offscreen)
+- **Request**: `{ type: 'MODEL_CHANGED', model: string }`
+- **Background Action**: Signals offscreen to preload the new model via `SET_MODEL_OFFSCREEN`, updates in-memory cache, and persists `selectedModel` to `chrome.storage.local`.
+- **Response**: `{ success: boolean, error?: string }`

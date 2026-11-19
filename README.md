@@ -28,7 +28,7 @@ Comprehensive technical documentation is maintained under `docs/`:
 ### Phase 4: Dynamic Support & Controls (Completed)
 - `MutationObserver` watches dynamically inserted images (infinite scroll) and DOM attribute swaps in Single Page Applications (SPAs).
 - Prioritized queue scans visible images immediately and off-screen images in the background.
-- Extension popup provides a Master Turn On / Turn Off toggle.
+- Extension popup provides a Master Turn On / Turn Off toggle and model switcher (MobileNet V2 for general web, MobileNet V3-Large for fast anime/illustration filtering).
 
 ## Installation & Testing
 1. Open `edge://extensions` in Microsoft Edge.

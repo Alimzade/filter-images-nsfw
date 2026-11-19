@@ -11,16 +11,23 @@ let creatingOffscreenPromise = null;
 
 // Synchronously cached configuration to avoid disk-backed LevelDB lookups on every image
 let cachedFilterEnabled = true;
+let cachedSelectedModel = 'public/nsfw_model.onnx';
 
-chrome.storage.local.get(['filterEnabled']).then((settings) => {
-  if (settings && settings.filterEnabled !== undefined) {
-    cachedFilterEnabled = settings.filterEnabled;
+chrome.storage.local.get(['filterEnabled', 'selectedModel']).then((settings) => {
+  if (settings) {
+    if (settings.filterEnabled !== undefined) cachedFilterEnabled = settings.filterEnabled;
+    if (settings.selectedModel) cachedSelectedModel = settings.selectedModel;
   }
 }).catch(() => {});
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.filterEnabled !== undefined) {
-    cachedFilterEnabled = changes.filterEnabled.newValue;
+  if (area === 'local') {
+    if (changes.filterEnabled !== undefined) {
+      cachedFilterEnabled = changes.filterEnabled.newValue;
+    }
+    if (changes.selectedModel !== undefined) {
+      cachedSelectedModel = changes.selectedModel.newValue;
+    }
   }
 });
 
@@ -111,6 +118,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendToOffscreenWithRetry({
       ...message,
       type: 'CHECK_NSFW_OFFSCREEN',
+      selectedModel: cachedSelectedModel,
     })
       .then((result) => sendResponse(result))
       .catch((e) => {
@@ -135,6 +143,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         sendResponse({ success: true });
       } catch (e) {
+        sendResponse({ success: false, error: String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === 'MODEL_CHANGED') {
+    (async () => {
+      // Point new scans at the new model straight away, so scans sent during the switch
+      // don't ask the offscreen document to reload the old one. Revert if the load fails.
+      const previousModel = cachedSelectedModel;
+      cachedSelectedModel = message.model;
+      try {
+        await setupOffscreen();
+        const offscreenResult = await chrome.runtime.sendMessage({
+          type: 'SET_MODEL_OFFSCREEN',
+          model: message.model,
+        });
+        if (offscreenResult && offscreenResult.success) {
+          await chrome.storage.local.set({ selectedModel: message.model });
+          sendResponse({ success: true });
+        } else {
+          cachedSelectedModel = previousModel;
+          const errMsg = (offscreenResult && offscreenResult.error) || 'Model failed to load';
+          sendResponse({ success: false, error: errMsg });
+        }
+      } catch (e) {
+        cachedSelectedModel = previousModel;
         sendResponse({ success: false, error: String(e) });
       }
     })();

@@ -23,6 +23,30 @@
         <span id="power-btn-text">Turn Off Filter</span>
       </button>
 
+      <div class="model-section">
+        <div class="model-section-header">
+          <span class="model-section-title">Model</span>
+          <span id="model-status-badge" class="model-status-badge">Ready</span>
+        </div>
+        <div class="model-options">
+          <label class="model-option" id="opt-mobilenet-v2">
+            <input type="radio" name="model" value="public/nsfw_model.onnx" />
+            <div class="model-card">
+              <div class="model-name">MobileNet V2</div>
+              <div class="model-meta">9.9 MB &middot; 5-class &middot; General Web (Default)</div>
+            </div>
+          </label>
+          <label class="model-option" id="opt-mobilenet-v3">
+            <input type="radio" name="model" value="public/mobilenet_v3.onnx" />
+            <div class="model-card">
+              <div class="model-name">MobileNet V3-Large <span class="model-tag">Fast</span></div>
+              <div class="model-meta">16.8 MB &middot; 3-class &middot; Anime & Illustration</div>
+            </div>
+          </label>
+        </div>
+        <div id="model-hint" class="model-hint"></div>
+      </div>
+
       <div class="footer">
         100% on-device AI. Zero telemetry.
       </div>

@@ -52,7 +52,8 @@
     {
       "resources": [
         "public/onnx/*",
-        "public/nsfw_model.onnx"
+        "public/nsfw_model.onnx",
+        "public/mobilenet_v3.onnx"
       ],
       "matches": [
         "<all_urls>"

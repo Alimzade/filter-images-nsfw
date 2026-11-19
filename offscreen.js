@@ -1,30 +1,53 @@
-const MODEL_PATH = 'public/nsfw_model.onnx';
+let currentModelName = 'public/nsfw_model.onnx';
 let currentSession = null;
 let sessionPromise = null;
 let isSessionReady = false;
 let inferenceQueue = Promise.resolve();
 
-const MOBILENET_LABELS = ['Drawing', 'Hentai', 'Neutral', 'Porn', 'Sexy'];
+const MOBILENET_V2_LABELS = ['Drawing', 'Hentai', 'Neutral', 'Porn', 'Sexy'];
+const MOBILENET_V3_LABELS = ['safe', 'r15', 'r18'];
 
-async function getSession() {
-  if (sessionPromise && currentSession) {
+function resolveModelPath(modelName) {
+  const bare = (modelName || currentModelName).replace(/^public\//, '');
+  return `public/${bare}`;
+}
+
+function isV3Model(modelPath) {
+  const lower = modelPath.toLowerCase();
+  return lower.includes('v3') || lower.includes('mobilenetv3');
+}
+
+// Each load gets a generation number. Only the newest load may publish its session,
+// so a slow, superseded load can never overwrite the active model.
+let loadGeneration = 0;
+
+// Resolves to { session, modelPath } so every inference keeps the pre/post-processing
+// that matches the session it actually runs on, even if the model is switched mid-request.
+async function getSession(modelName) {
+  const targetPath = resolveModelPath(modelName);
+
+  if (sessionPromise && currentModelName === targetPath) {
     return sessionPromise;
   }
 
+  const generation = ++loadGeneration;
   isSessionReady = false;
-  sessionPromise = (async () => {
+  currentSession = null;
+  currentModelName = targetPath;
+  const promise = (async () => {
     try {
-      console.log('NSFW Filter: Loading MobileNet V2 model...');
+      console.log(`NSFW Filter: Loading model: ${targetPath}...`);
       ort.env.wasm.wasmPaths = chrome.runtime.getURL('public/onnx/');
       ort.env.wasm.numThreads = 1;
 
-      const modelUrl = chrome.runtime.getURL(MODEL_PATH);
+      const modelUrl = chrome.runtime.getURL(targetPath);
+      console.log(`NSFW Filter: Fetching model from ${modelUrl}`);
       const response = await fetch(modelUrl);
       if (!response.ok && response.status !== 0) {
         throw new Error(`Failed to fetch model binary: ${response.status}`);
       }
       const modelBuffer = await response.arrayBuffer();
-      console.log(`NSFW Filter: Model buffer ready (${modelBuffer.byteLength} bytes). Creating session...`);
+      console.log(`NSFW Filter: Model ready (${modelBuffer.byteLength} bytes). Creating session...`);
 
       let session;
       const hasWebGpu = typeof navigator !== 'undefined' && Boolean(navigator.gpu);
@@ -34,9 +57,9 @@ async function getSession() {
           session = await ort.InferenceSession.create(modelBuffer, {
             executionProviders: ['webgpu', 'wasm'],
           });
-          console.log('NSFW Filter: WebGPU session ready.');
+          console.log(`NSFW Filter: WebGPU session ready (${targetPath}).`);
         } catch (gpuErr) {
-          console.warn('NSFW Filter: WebGPU session failed, falling back to WASM:', gpuErr);
+          console.warn('NSFW Filter: WebGPU initialization failed, falling back to WASM:', gpuErr);
         }
       }
 
@@ -44,22 +67,27 @@ async function getSession() {
         session = await ort.InferenceSession.create(modelBuffer, {
           executionProviders: ['wasm'],
         });
-        console.log('NSFW Filter: WASM session ready.');
+        console.log(`NSFW Filter: WASM session ready (${targetPath}).`);
       }
 
-      currentSession = session;
-      isSessionReady = true;
-      return session;
+      if (generation === loadGeneration) {
+        currentSession = session;
+        isSessionReady = true;
+      }
+      return { session, modelPath: targetPath };
     } catch (err) {
       console.error('NSFW Filter: Failed to initialize session:', err);
-      sessionPromise = null;
-      currentSession = null;
-      isSessionReady = false;
+      if (generation === loadGeneration) {
+        sessionPromise = null;
+        currentSession = null;
+        isSessionReady = false;
+      }
       throw err;
     }
   })();
 
-  return sessionPromise;
+  sessionPromise = promise;
+  return promise;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -70,9 +98,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     (async () => {
       try {
-        const session = await getSession();
+        const { session, modelPath } = await getSession(message.selectedModel);
 
-        // 1. Fetch, decode, and rasterize pixels concurrently in parallel outside the inference queue
+        // 1. Fetch, decode, and rasterize pixels concurrently outside the inference queue
         let pixels;
         try {
           pixels = await extractPixels(message);
@@ -83,10 +111,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        // 2. Strictly serialize the fast ~20ms neural net pass to prevent WASM 'Session already started' collisions
+        // 2. Strictly serialize the fast model inference pass to prevent WASM Session already started collisions
         const targetSize = 224;
         const inputName = session.inputNames[0];
-        const task = () => classifyMobileNet(session, inputName, pixels, targetSize);
+        const task = () => {
+          if (isV3Model(modelPath)) {
+            return classifyMobileNetV3(session, inputName, pixels, targetSize);
+          } else {
+            return classifyMobileNetV2(session, inputName, pixels, targetSize);
+          }
+        };
 
         const resultPromise = inferenceQueue.then(task, task);
         inferenceQueue = resultPromise.catch(() => {});
@@ -97,6 +131,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ isSafe: true, label: 'error_fallback' });
       }
     })();
+    return true;
+  }
+
+  if (message.type === 'SET_MODEL_OFFSCREEN') {
+    const newPath = resolveModelPath(message.model);
+    const previousPath = currentModelName;
+    getSession(newPath)
+      .then(() => {
+        sendResponse({ success: true, model: message.model });
+      })
+      .catch((err) => {
+        console.error('Model switch failed:', err);
+        if (previousPath && previousPath !== newPath) {
+          getSession(previousPath).catch(() => {});
+        }
+        sendResponse({ success: false, error: String(err) });
+      });
     return true;
   }
 });
@@ -152,8 +203,76 @@ async function extractPixels(message) {
   return pixels;
 }
 
-// MobileNet V2 (NSFWJS) classifier with calibrated Balanced threshold profile
-async function classifyMobileNet(session, inputName, pixels, targetSize) {
+// ---------------------------------------------------------------------------
+// MobileNetV3-Large Classifier (deepghs/anime_rating)
+// Input: Planar NCHW [1, 3, 224, 224], ImageNet normalized (mean [0.485, 0.456, 0.406], std [0.229, 0.224, 0.225])
+// Output: [1, 3] probabilities for [safe, r15, r18] (the export ends in a softmax)
+// ---------------------------------------------------------------------------
+async function classifyMobileNetV3(session, inputName, pixels, targetSize) {
+  const planeSize = targetSize * targetSize;
+  const floatData = new Float32Array(3 * planeSize);
+
+  for (let i = 0; i < planeSize; i++) {
+    const r = pixels[i * 4 + 0] / 255.0;
+    const g = pixels[i * 4 + 1] / 255.0;
+    const b = pixels[i * 4 + 2] / 255.0;
+
+    floatData[0 * planeSize + i] = (r - 0.485) / 0.229; // Red channel
+    floatData[1 * planeSize + i] = (g - 0.456) / 0.224; // Green channel
+    floatData[2 * planeSize + i] = (b - 0.406) / 0.225; // Blue channel
+  }
+  const tensor = new ort.Tensor('float32', floatData, [1, 3, targetSize, targetSize]);
+
+  const results = await session.run({ [inputName]: tensor });
+  const rawOutput = results[session.outputNames[0]].data;
+
+  // The bundled deepghs export already ends in a softmax, so its output is a probability
+  // distribution. Re-applying softmax would flatten every score below ~0.58 and the R18
+  // thresholds could never fire. Only apply softmax if the output looks like raw logits.
+  const values = Array.from(rawOutput);
+  const total = values.reduce((a, b) => a + b, 0);
+  const isDistribution = values.every((v) => v >= 0 && v <= 1) && Math.abs(total - 1) < 1e-2;
+  let probs = values;
+  if (!isDistribution) {
+    const maxLogit = Math.max(...values);
+    const exps = values.map((v) => Math.exp(v - maxLogit));
+    const sumExp = exps.reduce((a, b) => a + b, 0);
+    probs = exps.map((v) => v / sumExp);
+  }
+
+  const safeScore = probs[0];
+  const r15Score  = probs[1];
+  const r18Score  = probs[2];
+
+  const topIdx = probs.indexOf(Math.max(...probs));
+  const topLabel = MOBILENET_V3_LABELS[topIdx];
+
+  let isSafe = true;
+  let blockReason = '';
+
+  // MobileNetV3 (deepghs/anime_rating) is trained exclusively on anime/manga illustrations.
+  // Real-world photos (cars, scenery, everyday objects) are out-of-distribution and produce noisy logits.
+  // Require decisive high confidence on explicit R18 before blocking to prevent false positives on photos.
+  if (topLabel === 'r18' && r18Score >= 0.70) {
+    isSafe = false;
+    blockReason = `Explicit Adult R18 (${(r18Score * 100).toFixed(1)}%)`;
+  } else if (r18Score >= 0.85) {
+    isSafe = false;
+    blockReason = `Decisive Adult R18 (${(r18Score * 100).toFixed(1)}%)`;
+  }
+
+  const logDetails = `safe: ${(safeScore * 100).toFixed(1)}% | r15: ${(r15Score * 100).toFixed(1)}% | r18: ${(r18Score * 100).toFixed(1)}%`;
+  console.log(`[MobileNetV3][${isSafe ? 'SAFE' : 'BLOCK'}] ${blockReason ? blockReason + ' ' : ''}-> ${logDetails}`);
+
+  return { isSafe, label: topLabel, score: isSafe ? safeScore : r18Score };
+}
+
+// ---------------------------------------------------------------------------
+// MobileNet V2 (NSFWJS) Classifier - Balanced threshold profile
+// Input: Interleaved NHWC [1, 224, 224, 3], normalized to [0, 1]
+// Output: [1, 5] softmax for [Drawing, Hentai, Neutral, Porn, Sexy]
+// ---------------------------------------------------------------------------
+async function classifyMobileNetV2(session, inputName, pixels, targetSize) {
   const floatData = new Float32Array(targetSize * targetSize * 3);
   for (let i = 0; i < targetSize * targetSize; i++) {
     floatData[i * 3 + 0] = pixels[i * 4 + 0] / 255.0;
@@ -166,7 +285,7 @@ async function classifyMobileNet(session, inputName, pixels, targetSize) {
   const output = results[session.outputNames[0]].data;
 
   const scores = {};
-  MOBILENET_LABELS.forEach((label, i) => {
+  MOBILENET_V2_LABELS.forEach((label, i) => {
     scores[label] = output[i];
   });
 
@@ -178,7 +297,7 @@ async function classifyMobileNet(session, inputName, pixels, targetSize) {
 
   const pornHentai   = porn + hentai;
   const nsfwCombined = porn + hentai + sexy;
-  const topLabel = MOBILENET_LABELS.reduce((a, b) => (scores[a] > scores[b] ? a : b));
+  const topLabel = MOBILENET_V2_LABELS.reduce((a, b) => (scores[a] > scores[b] ? a : b));
 
   let isSafe = true;
   let blockReason = '';
@@ -218,8 +337,8 @@ async function classifyMobileNet(session, inputName, pixels, targetSize) {
   }
 
   const topScore = scores[topLabel];
-  const logDetails = MOBILENET_LABELS.map((l) => `${l}: ${(scores[l] * 100).toFixed(1)}%`).join(' | ');
-  console.log(`[MobileNet][${isSafe ? 'SAFE' : 'BLOCK'}] ${blockReason ? blockReason + ' ' : ''}-> ${logDetails}`);
+  const logDetails = MOBILENET_V2_LABELS.map((l) => `${l}: ${(scores[l] * 100).toFixed(1)}%`).join(' | ');
+  console.log(`[MobileNetV2][${isSafe ? 'SAFE' : 'BLOCK'}] ${blockReason ? blockReason + ' ' : ''}-> ${logDetails}`);
 
   return { isSafe, label: topLabel, score: topScore };
 }
