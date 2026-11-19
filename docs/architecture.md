@@ -114,3 +114,9 @@ Hentai rules are suppressed when `drawing > 0.30` (guard against anime/manga fal
 - **Request**: `{ type: 'MODEL_CHANGED', model: string }`
 - **Background Action**: Signals offscreen to preload the new model via `SET_MODEL_OFFSCREEN`, updates in-memory cache, and persists `selectedModel` to `chrome.storage.local`.
 - **Response**: `{ success: boolean, error?: string }`
+
+### `GET_SELECTED_MODEL` (Offscreen -> Background)
+- **Request**: `{ type: 'GET_SELECTED_MODEL' }`
+- **Background Action**: Reads `selectedModel` from `chrome.storage.local` (falls back to the in-memory cache).
+- **Response**: `{ model: string }`
+- **Purpose**: Offscreen documents cannot access `chrome.storage`, so on startup the offscreen document asks for the selected model and loads only that model.

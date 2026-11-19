@@ -109,6 +109,15 @@ async function sendToOffscreenWithRetry(payload, maxAttempts = 12) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'GET_SELECTED_MODEL') {
+    // Read storage directly: the in-memory cache may not be filled yet if the
+    // service worker has just started.
+    chrome.storage.local.get(['selectedModel'])
+      .then((settings) => sendResponse({ model: (settings && settings.selectedModel) || cachedSelectedModel }))
+      .catch(() => sendResponse({ model: cachedSelectedModel }));
+    return true;
+  }
+
   if (message.type === 'CHECK_NSFW') {
     if (!cachedFilterEnabled) {
       sendResponse({ isSafe: true, label: 'disabled', score: 1.0 });

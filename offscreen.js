@@ -343,4 +343,21 @@ async function classifyMobileNetV2(session, inputName, pixels, targetSize) {
   return { isSafe, label: topLabel, score: topScore };
 }
 
-getSession();
+// Offscreen documents can't read chrome.storage, so ask the background which model the
+// user selected and load only that one. Fall back to the default if the background
+// doesn't answer.
+async function loadSelectedModel() {
+  let model;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'GET_SELECTED_MODEL' });
+    model = response && response.model;
+  } catch (err) {
+    console.warn('NSFW Filter: Could not get selected model, using default:', err);
+  }
+  // A scan or model switch may already have started a load; don't start a second one.
+  if (!sessionPromise) {
+    getSession(model).catch(() => {});
+  }
+}
+
+loadSelectedModel();
